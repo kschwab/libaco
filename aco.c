@@ -198,14 +198,36 @@ void aco_funcp_protector(void){
 }
 
 aco_share_stack_t* aco_share_stack_new(size_t sz){
-    return aco_share_stack_new2(sz, 1);
+    return aco_static_share_stack_init2(NULL, sz, 1);
 }
 
 #define aco_size_t_safe_add_assert(a,b) do {   \
     assert((a)+(b) >= (a)); \
 }while(0)
 
+void* aco_malloc(size_t size, unsigned char** buf, unsigned char* const* const bufend){
+    void* mem;
+    if (!buf || !*buf){
+        mem = malloc(size);
+    } else {
+        assert(bufend);
+        mem = *buf;
+        *buf += size;
+        assert(*buf <= *bufend);
+    }
+    return mem;
+}
+
 aco_share_stack_t* aco_share_stack_new2(size_t sz, char guard_page_enabled){
+    return aco_static_share_stack_init2(NULL, sz, guard_page_enabled);
+}
+
+aco_share_stack_t* aco_static_share_stack_init(unsigned char* buf, size_t sz){
+    return aco_static_share_stack_init2(buf, sz, 1);
+}
+
+aco_share_stack_t* aco_static_share_stack_init2(unsigned char* buf, size_t sz, char guard_page_enabled){
+    assert(!buf || (sz >= (4096 << guard_page_enabled)));
     if(sz == 0){
         sz = 1024 * 1024 * 2;
     }
@@ -224,35 +246,50 @@ aco_share_stack_t* aco_share_stack_new2(size_t sz, char guard_page_enabled){
         u_pgsz = (size_t)((unsigned long)pgsz);
         // it should be always true in real life
         assert(u_pgsz == (unsigned long)pgsz && ((u_pgsz << 1) >> 1) == u_pgsz);
-        if(sz <= u_pgsz){
-            sz = u_pgsz << 1;
-        } else {
-            size_t new_sz;
-            if((sz & (u_pgsz - 1)) != 0){
-                new_sz = (sz & (~(u_pgsz - 1)));
-                assert(new_sz >= u_pgsz);
-                aco_size_t_safe_add_assert(new_sz, (u_pgsz << 1));
-                new_sz = new_sz + (u_pgsz << 1);
-                assert(sz / u_pgsz + 2 == new_sz / u_pgsz);
+        if (!buf){
+            if(sz <= u_pgsz){
+                sz = u_pgsz << 1;
             } else {
-                aco_size_t_safe_add_assert(sz, u_pgsz);
-                new_sz = sz + u_pgsz;
-                assert(sz / u_pgsz + 1 == new_sz / u_pgsz);
+                size_t new_sz;
+                if((sz & (u_pgsz - 1)) != 0){
+                    new_sz = (sz & (~(u_pgsz - 1)));
+                    assert(new_sz >= u_pgsz);
+                    aco_size_t_safe_add_assert(new_sz, (u_pgsz << 1));
+                    new_sz = new_sz + (u_pgsz << 1);
+                    assert(sz / u_pgsz + 2 == new_sz / u_pgsz);
+                } else {
+                    aco_size_t_safe_add_assert(sz, u_pgsz);
+                    new_sz = sz + u_pgsz;
+                    assert(sz / u_pgsz + 1 == new_sz / u_pgsz);
+                }
+                sz = new_sz;
+                assert((sz / u_pgsz > 1) && ((sz & (u_pgsz - 1)) == 0));
             }
-            sz = new_sz;
-            assert((sz / u_pgsz > 1) && ((sz & (u_pgsz - 1)) == 0));
         }
     }
 
-    aco_share_stack_t* p = (aco_share_stack_t*)malloc(sizeof(aco_share_stack_t));
+    unsigned char* const bufend = (buf) ? buf + sz : NULL;
+    aco_share_stack_t* p = aco_malloc(sizeof(aco_share_stack_t), &buf, &bufend);
     assertalloc_ptr(p);
     memset(p, 0, sizeof(aco_share_stack_t));
+    p->is_static_alloc = !!buf;
+    p->u_pgsz = u_pgsz;
 
     if(guard_page_enabled != 0){
-        p->real_ptr = mmap(
-            NULL, sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0
-        );
-        assertalloc_bool(p->real_ptr != MAP_FAILED);
+        if (!p->is_static_alloc){
+            p->real_ptr = mmap(
+                NULL, sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0
+            );
+            assertalloc_bool(p->real_ptr != MAP_FAILED);
+        } else {
+            uintptr_t buf_align = (uintptr_t)buf & (u_pgsz - 1);
+            if (buf_align) {
+                buf_align = (uintptr_t)buf - buf_align + u_pgsz;
+                aco_malloc(buf_align - (uintptr_t)buf, &buf, &bufend);
+                sz = bufend - buf;
+                p->real_ptr = aco_malloc(sz, &buf, &bufend);
+            }
+        }
         p->guard_page_enabled = 1;
         assert(0 == mprotect(p->real_ptr, u_pgsz, PROT_READ));
 
@@ -262,8 +299,9 @@ aco_share_stack_t* aco_share_stack_new2(size_t sz, char guard_page_enabled){
         p->sz = sz - u_pgsz;
     } else {
         //p->guard_page_enabled = 0;
+        sz = bufend - buf;
         p->sz = sz;
-        p->ptr = malloc(sz);
+        p->ptr = aco_malloc(sz, &buf, &bufend);
         assertalloc_ptr(p->ptr);
     }
 
@@ -292,15 +330,20 @@ void aco_share_stack_destroy(aco_share_stack_t* sstk){
 #ifdef ACO_USE_VALGRIND
     VALGRIND_STACK_DEREGISTER(sstk->valgrind_stk_id);
 #endif
-    if(sstk->guard_page_enabled){
-        assert(0 == munmap(sstk->real_ptr, sstk->real_sz));
-        sstk->real_ptr = NULL;
-        sstk->ptr = NULL;
+    if (!sstk->is_static_alloc){
+        if(sstk->guard_page_enabled){
+            assert(0 == munmap(sstk->real_ptr, sstk->real_sz));
+            sstk->real_ptr = NULL;
+            sstk->ptr = NULL;
+        } else {
+            free(sstk->ptr);
+            sstk->ptr = NULL;
+        }
+        free(sstk);
     } else {
-        free(sstk->ptr);
-        sstk->ptr = NULL;
+        assert(0 == mprotect(sstk->real_ptr, sstk->u_pgsz, PROT_READ|PROT_WRITE));
+        memset(sstk, 0, sizeof(aco_share_stack_t));
     }
-    free(sstk);
 }
 
 aco_t* aco_create(
@@ -355,6 +398,7 @@ aco_t* aco_create(
         p->fp = fp;
         p->share_stack = NULL;
         p->save_stack.ptr = NULL;
+        aco_gtls_co = p;
         return p;
     }
     assert(0);
@@ -483,33 +527,24 @@ void aco_resume(aco_t* resume_co){
 
 aco_attr_no_asan
 void aco_yield_to(aco_t* resume_co){
-    if(aco_unlikely(resume_co == NULL || resume_co->main_co == NULL
-        || resume_co->is_end != 0)){
-        // An error message here is helpful because
-        // we are running in a non-main co
-        fprintf(stderr, "Aborting: %s(resume_co=%p): resume_co is not valid: %s:%d\n",
-            __PRETTY_FUNCTION__, resume_co, __FILE__, __LINE__);
-        abort();
-    }
     aco_t* yield_co = aco_gtls_co;
-    if(aco_unlikely(resume_co == yield_co)){
-        // Nothing to do
-        return;
-    }
-    if(aco_unlikely(resume_co->main_co != yield_co->main_co
+    assert(resume_co != NULL && resume_co->is_end == 0
+       && (resume_co->main_co == yield_co->main_co ||
+           resume_co == yield_co->main_co ||
+           resume_co->main_co == yield_co)
+    );
+    if(aco_likely(resume_co != yield_co)){
         // A co cannot save its own stack
-        || resume_co->share_stack == yield_co->share_stack)){
-        fprintf(stderr, "Aborting: %s(resume_co=%p): resume_co has a different main co or share the same stack: %s:%d\n",
-            __PRETTY_FUNCTION__, resume_co, __FILE__, __LINE__);
-        abort();
+        assert(resume_co->share_stack != yield_co->share_stack);
+        // The test below is unlikely because
+        // aco_yield_to() is often called between two non-main cos
+        if(aco_unlikely(resume_co->share_stack &&
+                       (resume_co->share_stack->owner != resume_co))){
+            aco_own_stack(resume_co);
+        }
+        aco_gtls_co = resume_co;
+        acosw(yield_co, resume_co);
     }
-    // The test below is unlikely because
-    // aco_yield_to() is often called between two non-main cos
-    if(aco_unlikely(resume_co->share_stack->owner != resume_co)){
-        aco_own_stack(resume_co);
-    }
-    aco_gtls_co = resume_co;
-    acosw(yield_co, resume_co);
 }
 
 void aco_destroy(aco_t* co){

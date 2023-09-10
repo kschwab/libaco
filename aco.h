@@ -58,7 +58,7 @@ typedef struct {
     size_t max_cpsz;
     // copy from share stack to this save stack
     size_t ct_save;
-    // copy from this save stack to share stack 
+    // copy from this save stack to share stack
     size_t ct_restore;
 } aco_save_stack_t;
 
@@ -66,7 +66,7 @@ struct aco_s;
 typedef struct aco_s aco_t;
 
 typedef struct {
-    void*  ptr;            
+    void*  ptr;
     size_t sz;
     void*  align_highptr;
     void*  align_retptr;
@@ -75,8 +75,10 @@ typedef struct {
     aco_t* owner;
 
     char guard_page_enabled;
+    char is_static_alloc;
     void* real_ptr;
     size_t real_sz;
+    size_t u_pgsz;
 
 #ifdef ACO_USE_VALGRIND
     unsigned long valgrind_stk_id;
@@ -107,7 +109,7 @@ struct aco_s{
     char   is_end;
 
     aco_cofuncp_t fp;
-    
+
     aco_save_stack_t  save_stack;
     aco_share_stack_t* share_stack;
 };
@@ -169,14 +171,18 @@ extern void aco_funcp_protector(void);
 
 extern aco_share_stack_t* aco_share_stack_new(size_t sz);
 
-aco_share_stack_t* aco_share_stack_new2(size_t sz, char guard_page_enabled);
+extern aco_share_stack_t* aco_share_stack_new2(size_t sz, char guard_page_enabled);
+
+extern aco_share_stack_t* aco_static_share_stack_init(unsigned char* buf, size_t sz);
+
+aco_share_stack_t* aco_static_share_stack_init2(unsigned char* buf, size_t sz, char guard_page_enabled);
 
 extern void aco_share_stack_destroy(aco_share_stack_t* sstk);
 
 extern aco_t* aco_create(
         aco_t* main_co,
-        aco_share_stack_t* share_stack, 
-        size_t save_stack_sz, 
+        aco_share_stack_t* share_stack,
+        size_t save_stack_sz,
         aco_cofuncp_t fp, void* arg
     );
 
@@ -210,13 +216,15 @@ extern void aco_destroy(aco_t* co);
 
 #define aco_is_main_co(co) ({((co)->main_co) == NULL;})
 
-#define aco_exit1(co) do {     \
-    (co)->is_end = 1;           \
+#define aco_exit1(co) do {                        \
+    aco_t* yield_co = (co);                       \
+    (co)->is_end = 1;                             \
     aco_assert((co)->share_stack->owner == (co)); \
-    (co)->share_stack->owner = NULL; \
-    (co)->share_stack->align_validsz = 0; \
-    aco_yield1((co));            \
-    aco_assert(0);                  \
+    (co)->share_stack->owner = NULL;              \
+    (co)->share_stack->align_validsz = 0;         \
+    (co) = (co)->main_co;                         \
+    acosw(yield_co, (co));                        \
+    aco_assert(0);                                \
 } while(0)
 
 #define aco_exit() do {       \
