@@ -13,7 +13,7 @@ acosw:
         void*  reg[X];
         // ...
     }
-     
+
     reference:
         https://github.com/hjl-tools/x86-psABI/wiki/X86-psABI
 
@@ -23,13 +23,13 @@ acosw:
 
         > $ man 7 signal
         > ...
-        > By default, the signal handler is invoked on the normal process 
-        > stack.   It  is  possible  to arrange that the signal handler 
-        > uses an alternate stack; see sigaltstack(2) for a discussion of 
+        > By default, the signal handler is invoked on the normal process
+        > stack.   It  is  possible  to arrange that the signal handler
+        > uses an alternate stack; see sigaltstack(2) for a discussion of
         > how to do this and when it might be useful.
         > ...
 
-        This is a BUG example: 
+        This is a BUG example:
             https://github.com/Tencent/libco/blob/v1.0/coctx_swap.S#L27
 
     proof of correctness:
@@ -37,9 +37,9 @@ acosw:
 
     mxcsr & fpu:
         fnstcw * m2byte
-            Store FPU control word to m2byte without checking for 
+            Store FPU control word to m2byte without checking for
             pending unmasked floating-point exceptions.
-        
+
         fldcw m2byte
             Load FPU control word from m2byte.
 
@@ -132,7 +132,7 @@ aco_save_fpucw_mxcsr:
 #ifdef __i386__
     mov     eax,DWORD PTR [esp+0x4]     // ptr
     fnstcw  WORD PTR  [eax]
-    stmxcsr DWORD PTR [eax+0x4] 
+    stmxcsr DWORD PTR [eax+0x4]
     ret
 #elif __x86_64__
     fnstcw  WORD PTR  [rdi]
@@ -189,4 +189,8 @@ aco_funcp_protector_asm:
             ret
 #else
     #error "platform not support"
+#endif
+
+#ifdef __ELF__
+.section .note.GNU-stack,"",@progbits
 #endif
