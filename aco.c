@@ -547,6 +547,26 @@ void aco_yield_to(aco_t* resume_co){
     }
 }
 
+aco_attr_no_asan
+void aco_yield_to_no_gtls(aco_t* yield_co, aco_t* resume_co){
+    assert(resume_co != NULL && resume_co->is_end == 0
+       && (resume_co->main_co == yield_co->main_co ||
+           resume_co == yield_co->main_co ||
+           resume_co->main_co == yield_co)
+    );
+    if(aco_likely(resume_co != yield_co)){
+        // A co cannot save its own stack
+        assert(resume_co->share_stack != yield_co->share_stack);
+        // The test below is unlikely because
+        // aco_yield_to() is often called between two non-main cos
+        if(aco_unlikely(resume_co->share_stack &&
+                       (resume_co->share_stack->owner != resume_co))){
+            aco_own_stack(resume_co);
+        }
+        acosw(yield_co, resume_co);
+    }
+}
+
 void aco_destroy(aco_t* co){
     assertptr(co);
     if(aco_is_main_co(co)){
