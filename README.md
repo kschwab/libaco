@@ -51,6 +51,7 @@ Besides this readme, you could also visit the documentation from [https://libaco
       * [aco_resume](#aco_resume)
       * [aco_yield](#aco_yield)
       * [aco_yield_to](#aco_yield_to)
+      * [aco_yield_to_no_gtls](#aco_yield_to_no_gtls)
       * [aco_get_co](#aco_get_co)
       * [aco_get_arg](#aco_get_arg)
       * [aco_exit](#aco_exit)
@@ -388,6 +389,14 @@ Yield the execution of `co` and resume `resume_co`. The caller of this function 
 After the call of `aco_yield_to`, we name the state of the caller — `co` as "yielded".
 
 `aco_yield_to()` is useful when a non-main co wants to yield to another co with a single context switch. Without `aco_yield_to()`, one has to go through two switches: one switch back to main co and another switch to the desired non-main co.
+
+## aco_yield_to_no_gtls
+
+```c
+void aco_yield_to_no_gtls(aco_t* yield_co, aco_t* resume_co);
+```
+
+Same as `aco_yield_to`, but does not use aco's Global Thread Local Storage variable `aco_gtls_co`. Instead, the `yield_co` is explicitly provided for a direct context switch from `yield_co` to `resume_co`.
 
 ## aco_get_co
 
