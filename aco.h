@@ -219,15 +219,13 @@ extern void aco_destroy(aco_t* co);
 
 #define aco_is_main_co(co) ({((co)->main_co) == NULL;})
 
-#define aco_exit1(co) do {                        \
-    aco_t* yield_co = (co);                       \
-    (co)->is_end = 1;                             \
+#define aco_exit1(co) do {     \
+    (co)->is_end = 1;           \
     aco_assert((co)->share_stack->owner == (co)); \
-    (co)->share_stack->owner = NULL;              \
-    (co)->share_stack->align_validsz = 0;         \
-    (co) = (co)->main_co;                         \
-    acosw(yield_co, (co));                        \
-    aco_assert(0);                                \
+    (co)->share_stack->owner = NULL; \
+    (co)->share_stack->align_validsz = 0; \
+    aco_yield1((co));            \
+    aco_assert(0);                  \
 } while(0)
 
 #define aco_exit() do {       \
