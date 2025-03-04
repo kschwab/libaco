@@ -286,7 +286,7 @@ aco_share_stack_t* aco_static_share_stack_init2(unsigned char* buf, size_t sz, c
             if (buf_align) {
                 buf_align = (uintptr_t)buf - buf_align + u_pgsz;
                 aco_malloc(buf_align - (uintptr_t)buf, &buf, &bufend);
-                sz = bufend - buf;
+                sz = (p->is_static_alloc) ? (bufend - buf) : sz;
                 p->real_ptr = aco_malloc(sz, &buf, &bufend);
             }
         }
@@ -299,7 +299,7 @@ aco_share_stack_t* aco_static_share_stack_init2(unsigned char* buf, size_t sz, c
         p->sz = sz - u_pgsz;
     } else {
         //p->guard_page_enabled = 0;
-        sz = bufend - buf;
+        sz = (p->is_static_alloc) ? (bufend - buf) : sz;
         p->sz = sz;
         p->ptr = aco_malloc(sz, &buf, &bufend);
         assertalloc_ptr(p->ptr);
